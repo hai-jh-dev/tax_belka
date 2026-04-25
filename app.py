@@ -1,62 +1,133 @@
 import os
 import io
+import json
 from datetime import date, timedelta
-from functools import lru_cache
 
 import pandas as pd
 import requests
 from flask import Flask, request, render_template, jsonify
 
 app = Flask(__name__)
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB for bulk uploads
 
 TAX_RATE = 0.19
 NBP_RANGE_API = "https://api.nbp.pl/api/exchangerates/rates/a/eur/{start}/{end}/?format=json"
 NBP_SINGLE_API = "https://api.nbp.pl/api/exchangerates/rates/a/eur/{date}/?format=json"
 
+# Persistent disk cache: nbp_cache.json lives next to app.py
+CACHE_FILE = os.path.join(os.path.dirname(__file__), "nbp_cache.json")
 
-@lru_cache(maxsize=512)
-def _fetch_single_rate(date_str: str):
+
+def _load_cache():
+    if os.path.exists(CACHE_FILE):
+        try:
+            with open(CACHE_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_cache(cache):
+    try:
+        with open(CACHE_FILE, "w") as f:
+            json.dump(cache, f, separators=(",", ":"))
+    except Exception as e:
+        print(f"[warn] Cannot save NBP cache: {e}")
+
+
+# In-memory layer (loaded once at startup, written to disk after each NBP fetch)
+_rate_cache = _load_cache()
+print(f"[nbp cache] Loaded {len(_rate_cache)} cached rates from disk.")
+
+
+def _get_cached(date_str):
+    return _rate_cache.get(date_str)
+
+
+def _set_cached(date_str, rate):
+    _rate_cache[date_str] = rate
+    _save_cache(_rate_cache)
+
+
+def fetch_single_rate(date_str):
+    cached = _get_cached(date_str)
+    if cached is not None:
+        return cached
     try:
         r = requests.get(NBP_SINGLE_API.format(date=date_str), timeout=8)
         if r.status_code == 200:
-            return r.json()["rates"][0]["mid"]
+            rate = r.json()["rates"][0]["mid"]
+            _set_cached(date_str, rate)
+            return rate
     except Exception:
         pass
     return None
 
 
-def get_nbp_rates_bulk(start: date, end: date) -> dict:
-    url = NBP_RANGE_API.format(start=start.isoformat(), end=end.isoformat())
-    try:
-        r = requests.get(url, timeout=15)
-        if r.status_code == 200:
-            return {row["effectiveDate"]: row["mid"] for row in r.json()["rates"]}
-    except Exception:
-        pass
-    return {}
+def get_nbp_rates_bulk(start, end):
+    """Fetch a date range from NBP, filling in any gaps from cache. Returns dict {date_str: rate}."""
+    # Figure out which dates we're missing from cache
+    result = {}
+    missing_start = None
+    missing_end = None
+
+    check = start
+    while check <= end:
+        ds = check.isoformat()
+        cached = _get_cached(ds)
+        if cached is not None:
+            result[ds] = cached
+        else:
+            if missing_start is None:
+                missing_start = check
+            missing_end = check
+        check += timedelta(days=1)
+
+    # Fetch only the missing range from NBP (if any)
+    if missing_start is not None:
+        url = NBP_RANGE_API.format(start=missing_start.isoformat(), end=missing_end.isoformat())
+        try:
+            r = requests.get(url, timeout=15)
+            if r.status_code == 200:
+                fetched = {}
+                for row in r.json()["rates"]:
+                    fetched[row["effectiveDate"]] = row["mid"]
+                    result[row["effectiveDate"]] = row["mid"]
+                # Persist new rates
+                _rate_cache.update(fetched)
+                _save_cache(_rate_cache)
+                print(f"[nbp cache] Fetched {len(fetched)} new rates ({missing_start} – {missing_end}), cache now {len(_rate_cache)} entries.")
+        except Exception as e:
+            print(f"[warn] NBP bulk fetch failed: {e}")
+
+    return result
 
 
-def prev_business_day_rate(tx_date: date, rate_map: dict):
-    """Kurs NBP z poprzedniego dnia roboczego (D-1)."""
+def prev_business_day_rate(tx_date, rate_map):
+    """Return (rate, rate_date_str) from the previous business day."""
     for delta in range(1, 12):
         d = tx_date - timedelta(days=delta)
         rate = rate_map.get(d.isoformat())
         if rate is not None:
             return rate, d.isoformat()
-    # fallback: pojedyncze zapytania
+    # Fallback: single requests (also cached)
     for delta in range(1, 12):
         d = tx_date - timedelta(days=delta)
-        rate = _fetch_single_rate(d.isoformat())
+        rate = fetch_single_rate(d.isoformat())
         if rate is not None:
             return rate, d.isoformat()
     return None, None
 
 
 def parse_money(val):
-    """Parsuje wartości w formacie '+€2,29' lub '+€45,000'."""
-    if pd.isna(val) or val is None:
+    if val is None:
         return None
+    try:
+        if pd.isna(val):
+            return None
+    except Exception:
+        pass
     s = str(val).replace("+", "").replace("€", "").replace(",", "").strip()
     try:
         return float(s)
@@ -64,11 +135,7 @@ def parse_money(val):
         return None
 
 
-def parse_revolut_csv(file_bytes: bytes):
-    """
-    Parsuje wyciąg Revolut z lokaty.
-    Oczekiwane kolumny: Completed Date, Description, Money in, Money out, Balance, Product name
-    """
+def parse_revolut_csv(file_bytes, filename="unknown"):
     df = None
     for enc in ("utf-8-sig", "utf-8", "latin-1"):
         try:
@@ -77,54 +144,48 @@ def parse_revolut_csv(file_bytes: bytes):
         except Exception:
             continue
     if df is None:
-        raise ValueError("Nie można odczytać pliku CSV.")
+        raise ValueError(f"[{filename}] Nie można odczytać pliku CSV.")
 
     df.columns = [c.strip() for c in df.columns]
 
-    # Sprawdź czy to właściwy format Revolut savings
     required = {"Completed Date", "Description", "Money in"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(
-            f"Nieoczekiwany format CSV. Brakuje kolumn: {missing}. "
-            f"Dostępne kolumny: {list(df.columns)}"
+            f"[{filename}] Nieoczekiwany format. Brakuje kolumn: {missing}. "
+            f"Dostępne: {list(df.columns)}"
         )
 
-    # Filtruj tylko odsetki (Gross interest)
     interest_df = df[df["Description"].str.contains("Gross interest", na=False, case=False)].copy()
 
     if interest_df.empty:
-        raise ValueError(
-            "Nie znaleziono wierszy z odsetkami ('Gross interest') w pliku. "
-            "Upewnij się, że to wyciąg z konta oszczędnościowego Revolut."
-        )
+        raise ValueError(f"[{filename}] Brak wierszy 'Gross interest'.")
 
-    # Parsuj datę: "17 Jun 2025"
     interest_df["date"] = pd.to_datetime(
         interest_df["Completed Date"].str.strip(), format="%d %b %Y", errors="coerce"
     ).dt.date
 
-    # Parsuj kwotę odsetek
     interest_df["amount_eur"] = interest_df["Money in"].apply(parse_money)
 
-    # Usuń wiersze z błędami parsowania
     bad = interest_df[interest_df["date"].isna() | interest_df["amount_eur"].isna()]
     if not bad.empty:
-        print(f"[warn] Pominięto {len(bad)} wierszy z błędem parsowania")
+        print(f"[warn][{filename}] Pominięto {len(bad)} wierszy z błędem parsowania")
+
     interest_df = interest_df.dropna(subset=["date", "amount_eur"])
     interest_df = interest_df[interest_df["amount_eur"] > 0]
 
     if interest_df.empty:
-        raise ValueError("Po filtrowaniu nie zostały żadne prawidłowe wiersze z odsetkami.")
+        raise ValueError(f"[{filename}] Po filtrowaniu brak prawidłowych wierszy.")
 
-    return interest_df[["date", "amount_eur", "Description"]].reset_index(drop=True)
+    interest_df = interest_df[["date", "amount_eur"]].reset_index(drop=True)
+    interest_df["source"] = filename
+    return interest_df
 
 
 def calculate_tax(interest_df):
     min_date = interest_df["date"].min()
     max_date = interest_df["date"].max()
 
-    # Pobierz kursy NBP z zapasem 15 dni (cofamy się dla weekendów/świąt)
     rate_map = get_nbp_rates_bulk(min_date - timedelta(days=15), max_date)
 
     records = []
@@ -133,6 +194,7 @@ def calculate_tax(interest_df):
     for _, row in interest_df.iterrows():
         tx_date = row["date"]
         amount_eur = float(row["amount_eur"])
+        source = row.get("source", "")
 
         nbp_rate, rate_date = prev_business_day_rate(tx_date, rate_map)
         if nbp_rate is None:
@@ -150,10 +212,11 @@ def calculate_tax(interest_df):
             "nbp_rate_date": rate_date,
             "amount_pln": round(amount_pln, 4),
             "tax_pln": round(tax_pln, 4),
+            "source": source,
         })
 
     if not records:
-        raise ValueError("Nie udało się pobrać kursów NBP dla żadnej transakcji. Sprawdź połączenie z internetem.")
+        raise ValueError("Nie udało się pobrać kursów NBP. Sprawdź połączenie z internetem.")
 
     result_df = pd.DataFrame(records)
 
@@ -181,6 +244,18 @@ def calculate_tax(interest_df):
         .sort_values("month")
     )
 
+    # Per-file summary
+    per_file = (
+        result_df.groupby("source")
+        .agg(
+            transactions=("amount_eur", "count"),
+            amount_eur=("amount_eur", "sum"),
+            amount_pln=("amount_pln", "sum"),
+            tax_pln=("tax_pln", "sum"),
+        )
+        .reset_index()
+    )
+
     yearly = {
         "amount_eur": round(float(result_df["amount_eur"].sum()), 4),
         "amount_pln": round(float(result_df["amount_pln"].sum()), 4),
@@ -190,6 +265,7 @@ def calculate_tax(interest_df):
     return {
         "daily": daily.round(4).to_dict(orient="records"),
         "monthly": monthly.round(4).to_dict(orient="records"),
+        "per_file": per_file.round(4).to_dict(orient="records"),
         "yearly": yearly,
         "missing_rates": missing_rates,
         "tax_rate_pct": TAX_RATE * 100,
@@ -198,6 +274,7 @@ def calculate_tax(interest_df):
             "from": min_date.isoformat(),
             "to": max_date.isoformat(),
         },
+        "cache_size": len(_rate_cache),
     }
 
 
@@ -208,20 +285,44 @@ def index():
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    if "file" not in request.files:
-        return jsonify({"error": "Brak pliku"}), 400
-    file = request.files["file"]
-    if not file.filename.lower().endswith(".csv"):
-        return jsonify({"error": "Wymagany plik .csv"}), 400
+    files = request.files.getlist("files")
+    if not files or all(f.filename == "" for f in files):
+        return jsonify({"error": "Brak plików"}), 400
+
+    all_frames = []
+    file_errors = []
+
+    for f in files:
+        if not f.filename.lower().endswith(".csv"):
+            file_errors.append(f"{f.filename}: pomijam (nie .csv)")
+            continue
+        try:
+            df = parse_revolut_csv(f.read(), f.filename)
+            all_frames.append(df)
+        except ValueError as e:
+            file_errors.append(str(e))
+
+    if not all_frames:
+        return jsonify({"error": "Żaden plik nie zawierał danych. " + " | ".join(file_errors)}), 422
+
+    combined = pd.concat(all_frames, ignore_index=True)
+    # Deduplicate: same date + same amount from different files (overlap guard)
+    combined = combined.drop_duplicates(subset=["date", "amount_eur", "source"])
+
     try:
-        file_bytes = file.read()
-        df = parse_revolut_csv(file_bytes)
-        result = calculate_tax(df)
+        result = calculate_tax(combined)
+        result["file_errors"] = file_errors
+        result["files_loaded"] = [df["source"].iloc[0] for df in all_frames]
         return jsonify(result)
     except ValueError as e:
         return jsonify({"error": str(e)}), 422
     except Exception as e:
         return jsonify({"error": f"Błąd serwera: {str(e)}"}), 500
+
+
+@app.route("/cache-info")
+def cache_info():
+    return jsonify({"cached_rates": len(_rate_cache), "sample": dict(list(_rate_cache.items())[:5])})
 
 
 if __name__ == "__main__":
