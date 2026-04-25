@@ -1,4 +1,4 @@
-name: revolut-tax
+name: tax-belka
 channels:
   - defaults
 dependencies:
@@ -9,3 +9,4 @@ dependencies:
     - pandas>=2.0
     - requests>=2.31
     - gunicorn>=21.0
+ 
