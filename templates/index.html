@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Revolut Lokata – Kalkulator Podatku Belki</title>
+<style>
+  :root {
+    --bg: #0f0f13;
+    --surface: #1a1a24;
+    --surface2: #22222f;
+    --border: #2e2e42;
+    --accent: #7c5cfc;
+    --accent2: #a78bfa;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --text: #e2e2ef;
+    --muted: #7878a0;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; min-height: 100vh; }
+
+  header {
+    background: linear-gradient(135deg, #1a1a24 0%, #12122a 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 1.25rem 2rem;
+    display: flex; align-items: center; gap: 1rem;
+  }
+  header h1 { font-size: 1.3rem; font-weight: 700; }
+  header p { font-size: 0.82rem; color: var(--muted); margin-top: .15rem; }
+
+  main { max-width: 1150px; margin: 0 auto; padding: 2rem 1.5rem; }
+
+  /* Upload */
+  .upload-area {
+    border: 2px dashed var(--border);
+    border-radius: var(--radius);
+    padding: 3.5rem 2rem;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color .2s, background .2s;
+    background: var(--surface);
+    user-select: none;
+  }
+  .upload-area:hover, .upload-area.dragover {
+    border-color: var(--accent);
+    background: #1c1b2e;
+  }
+  .upload-area .icon { font-size: 3rem; margin-bottom: .75rem; display: block; }
+  .upload-area strong { font-size: 1.05rem; }
+  .upload-area p { color: var(--muted); margin-top: .4rem; font-size: .875rem; }
+  .upload-area .hint { font-size: .78rem; color: #55558a; margin-top: .6rem; }
+  #file-input { display: none; }
+  .btn {
+    display: inline-block;
+    background: var(--accent);
+    color: #fff;
+    padding: .6rem 1.4rem;
+    border-radius: 8px;
+    border: none;
+    font-size: .9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background .15s;
+    margin-top: 1rem;
+  }
+  .btn:hover { background: #6848e8; }
+
+  /* Error */
+  .error-box {
+    background: #2d1a1a; border: 1px solid var(--red);
+    color: var(--red); border-radius: var(--radius);
+    padding: 1rem 1.2rem; margin-top: 1.5rem; display: none;
+    line-height: 1.5;
+  }
+
+  /* Spinner */
+  #spinner { display: none; text-align: center; padding: 3rem; color: var(--muted); font-size: .95rem; }
+  .spin-icon { font-size: 2.5rem; display: block; margin-bottom: .75rem; animation: spin 1.5s linear infinite; display: inline-block; }
+  @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+
+  /* Results */
+  #results { display: none; }
+
+  /* File info bar */
+  .file-info {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: .75rem 1.2rem;
+    display: flex; align-items: center; gap: 1rem;
+    margin-bottom: 1.5rem;
+    font-size: .875rem; color: var(--muted);
+  }
+  .file-info strong { color: var(--text); }
+  .file-info .dot { color: var(--border); }
+
+  /* Summary cards */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1rem; margin-bottom: 1.75rem; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.3rem 1.2rem;
+  }
+  .card .label { font-size: .75rem; color: var(--muted); text-transform: uppercase; letter-spacing: .07em; margin-bottom: .45rem; }
+  .card .value { font-size: 1.65rem; font-weight: 700; line-height: 1.1; }
+  .card .sub { font-size: .82rem; color: var(--muted); margin-top: .35rem; }
+  .card.highlight { border-color: var(--accent); background: #18162a; }
+  .value.green { color: var(--green); }
+  .value.red { color: var(--red); }
+  .value.yellow { color: var(--yellow); }
+
+  /* Tabs */
+  .tab-bar { display: flex; gap: .4rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
+  .tab {
+    padding: .55rem 1.1rem;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer; font-size: .875rem; font-weight: 500;
+    color: var(--muted); border: 1px solid transparent;
+    border-bottom: none; background: transparent; transition: .15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--accent2); border-color: var(--border); border-bottom: 1px solid var(--bg); background: var(--surface); }
+
+  /* Table */
+  .table-wrap { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: .86rem; }
+  th {
+    background: var(--surface2);
+    padding: .7rem 1rem;
+    text-align: left;
+    font-size: .75rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .05em;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--border);
+    position: sticky; top: 0;
+  }
+  td { padding: .6rem 1rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: #1e1e2e; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; font-family: 'JetBrains Mono', 'Fira Code', monospace; }
+  .sum-row td { font-weight: 700; background: var(--surface2) !important; }
+  .tax-val { color: var(--red); font-weight: 600; }
+
+  .nbp-date { color: var(--muted); font-size: .78rem; }
+
+  /* Warning */
+  .warn {
+    background: #262010; border: 1px solid var(--yellow);
+    border-radius: var(--radius); padding: .85rem 1rem;
+    font-size: .84rem; color: var(--yellow); margin-top: 1rem;
+  }
+
+  footer {
+    text-align: center; color: var(--muted); font-size: .76rem;
+    padding: 2.5rem 1rem; border-top: 1px solid var(--border); margin-top: 3rem;
+    line-height: 1.8;
+  }
+  footer a { color: var(--accent2); text-decoration: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <span style="font-size:1.8rem">💰</span>
+  <div>
+    <h1>Revolut Lokata — Kalkulator Podatku Belki</h1>
+    <p>Instant Access (Aion Bank) · Kurs EUR/PLN NBP z D-1 (poprzedni dzień roboczy) · Podatek 19%</p>
+  </div>
+</header>
+
+<main>
+  <div class="upload-area" id="drop-zone">
+    <span class="icon">📄</span>
+    <strong>Wrzuć wyciąg CSV z Revolut</strong>
+    <p>lub kliknij, aby wybrać plik</p>
+    <p class="hint">Revolut app → Savings → Instant Access → Statement → CSV (format PLN lub EUR)</p>
+    <input type="file" id="file-input" accept=".csv">
+    <br>
+    <button class="btn" onclick="document.getElementById('file-input').click(); event.stopPropagation();">Wybierz plik</button>
+  </div>
+
+  <div class="error-box" id="error-box"></div>
+
+  <div id="spinner">
+    <span class="spin-icon">⏳</span><br>
+    Pobieranie kursów EUR/PLN z NBP i obliczanie podatku…
+  </div>
+
+  <div id="results">
+    <div class="file-info" id="file-info"></div>
+
+    <div class="cards" id="summary-cards"></div>
+
+    <div class="tab-bar">
+      <div class="tab active" data-tab="daily" onclick="showTab('daily')">📅 Dziennie</div>
+      <div class="tab" data-tab="monthly" onclick="showTab('monthly')">📆 Miesięcznie</div>
+    </div>
+
+    <div id="tab-daily" class="table-wrap"></div>
+    <div id="tab-monthly" class="table-wrap" style="display:none"></div>
+
+    <div id="warn-missing" class="warn" style="display:none"></div>
+  </div>
+</main>
+
+<footer>
+  Kursy EUR/PLN pobierane na żywo z <a href="https://api.nbp.pl" target="_blank">api.nbp.pl (NBP)</a> ·
+  Podatek Belki 19% zgodnie z art. 30a ust. 1 pkt 3 ustawy o PIT<br>
+  Aplikacja ma charakter informacyjny i nie stanowi porady podatkowej.
+  W razie wątpliwości skonsultuj się z doradcą podatkowym.
+</footer>
+
+<script>
+// ---------- Drag & Drop ----------
+const zone = document.getElementById('drop-zone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
+zone.addEventListener('drop', e => {
+  e.preventDefault(); zone.classList.remove('dragover');
+  const f = e.dataTransfer.files[0];
+  if (f) processFile(f);
+});
+document.getElementById('file-input').addEventListener('change', e => {
+  if (e.target.files[0]) processFile(e.target.files[0]);
+});
+zone.addEventListener('click', () => document.getElementById('file-input').click());
+
+// ---------- Format helpers ----------
+function fmt(n, dec = 2) {
+  if (n === undefined || n === null || isNaN(n)) return '—';
+  return Number(n).toLocaleString('pl-PL', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+}
+function fmtEur(n) { return fmt(n, 6); }
+function fmtRate(n) { return fmt(n, 4); }
+
+// ---------- Upload ----------
+function showError(msg) {
+  const b = document.getElementById('error-box');
+  b.innerHTML = '⚠️ ' + msg;
+  b.style.display = 'block';
+}
+function hideError() { document.getElementById('error-box').style.display = 'none'; }
+
+let currentFile = null;
+
+function processFile(file) {
+  currentFile = file;
+  hideError();
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('spinner').style.display = 'block';
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  fetch('/upload', { method: 'POST', body: fd })
+    .then(r => r.json())
+    .then(data => {
+      document.getElementById('spinner').style.display = 'none';
+      if (data.error) { showError(data.error); return; }
+      renderResults(data, file.name);
+    })
+    .catch(() => {
+      document.getElementById('spinner').style.display = 'none';
+      showError('Błąd połączenia z serwerem. Upewnij się że aplikacja działa.');
+    });
+}
+
+// ---------- Render ----------
+function renderResults(d, filename) {
+  const y = d.yearly;
+  const dr = d.date_range;
+
+  // File info bar
+  document.getElementById('file-info').innerHTML = `
+    <span>📄 <strong>${filename}</strong></span>
+    <span class="dot">·</span>
+    <span>Zakres: <strong>${dr.from}</strong> → <strong>${dr.to}</strong></span>
+    <span class="dot">·</span>
+    <span>${d.total_transactions} wypłat odsetek</span>
+  `;
+
+  // Summary cards
+  document.getElementById('summary-cards').innerHTML = `
+    <div class="card">
+      <div class="label">Łączne odsetki brutto</div>
+      <div class="value green">${fmtEur(y.amount_eur)} EUR</div>
+      <div class="sub">${fmt(y.amount_pln)} PLN (wg kursów NBP)</div>
+    </div>
+    <div class="card highlight">
+      <div class="label">Podatek Belki do zapłaty</div>
+      <div class="value red">${fmt(y.tax_pln)} PLN</div>
+      <div class="sub">19% · wykazać w PIT-38</div>
+    </div>
+    <div class="card">
+      <div class="label">Zysk netto po podatku</div>
+      <div class="value yellow">${fmt(y.amount_pln - y.tax_pln)} PLN</div>
+      <div class="sub">${fmtEur(y.amount_eur)} EUR × kurs − 19%</div>
+    </div>
+    <div class="card">
+      <div class="label">Liczba wypłat odsetek</div>
+      <div class="value">${d.total_transactions}</div>
+      <div class="sub">Gross interest · ${dr.from} — ${dr.to}</div>
+    </div>
+  `;
+
+  // Daily table
+  document.getElementById('tab-daily').innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Data wypłaty</th>
+          <th class="num">Odsetki EUR</th>
+          <th class="num">Kurs NBP D-1</th>
+          <th class="num">Data kursu</th>
+          <th class="num">Wartość PLN</th>
+          <th class="num">Podatek 19% PLN</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${d.daily.map(r => `
+          <tr>
+            <td>${r.date}</td>
+            <td class="num">${fmtEur(r.amount_eur)}</td>
+            <td class="num">${fmtRate(r.nbp_rate)}</td>
+            <td class="num nbp-date">${r.nbp_rate_date || '—'}</td>
+            <td class="num">${fmt(r.amount_pln, 4)}</td>
+            <td class="num tax-val">${fmt(r.tax_pln, 4)}</td>
+          </tr>`).join('')}
+        <tr class="sum-row">
+          <td>SUMA ROCZNA</td>
+          <td class="num">${fmtEur(y.amount_eur)}</td>
+          <td class="num">—</td>
+          <td class="num">—</td>
+          <td class="num">${fmt(y.amount_pln, 4)}</td>
+          <td class="num tax-val">${fmt(y.tax_pln, 4)}</td>
+        </tr>
+      </tbody>
+    </table>`;
+
+  // Monthly table
+  document.getElementById('tab-monthly').innerHTML = `
+    <table>
+      <thead>
+        <tr>
+          <th>Miesiąc</th>
+          <th class="num">Odsetki EUR</th>
+          <th class="num">Wartość PLN</th>
+          <th class="num">Podatek 19% PLN</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${d.monthly.map(r => `
+          <tr>
+            <td>${r.month}</td>
+            <td class="num">${fmtEur(r.amount_eur)}</td>
+            <td class="num">${fmt(r.amount_pln, 4)}</td>
+            <td class="num tax-val">${fmt(r.tax_pln, 4)}</td>
+          </tr>`).join('')}
+        <tr class="sum-row">
+          <td>SUMA ROCZNA</td>
+          <td class="num">${fmtEur(y.amount_eur)}</td>
+          <td class="num">${fmt(y.amount_pln, 4)}</td>
+          <td class="num tax-val">${fmt(y.tax_pln, 4)}</td>
+        </tr>
+      </tbody>
+    </table>`;
+
+  // Missing rates warning
+  const warnEl = document.getElementById('warn-missing');
+  if (d.missing_rates && d.missing_rates.length > 0) {
+    warnEl.style.display = 'block';
+    warnEl.textContent = `⚠️ Nie udało się pobrać kursu NBP dla ${d.missing_rates.length} dat: ${d.missing_rates.join(', ')}. Te transakcje zostały pominięte z obliczeń.`;
+  } else {
+    warnEl.style.display = 'none';
+  }
+
+  document.getElementById('results').style.display = 'block';
+  document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ---------- Tabs ----------
+function showTab(name) {
+  document.querySelectorAll('.tab').forEach(t => {
+    t.classList.toggle('active', t.dataset.tab === name);
+  });
+  document.getElementById('tab-daily').style.display = name === 'daily' ? '' : 'none';
+  document.getElementById('tab-monthly').style.display = name === 'monthly' ? '' : 'none';
+}
+</script>
+</body>
+</html>

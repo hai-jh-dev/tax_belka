@@ -1,0 +1,10 @@
+name: tax_belka
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip
+  - pip:
+    - flask>=3.0
+    - pandas>=2.0
+    - requests>=2.31
