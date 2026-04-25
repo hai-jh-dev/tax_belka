@@ -53,7 +53,7 @@ def prev_business_day_rate(tx_date: date, rate_map: dict):
     return None, None
 
 
-def parse_money(val) -> float | None:
+def parse_money(val):
     """Parsuje wartości w formacie '+€2,29' lub '+€45,000'."""
     if pd.isna(val) or val is None:
         return None
@@ -64,7 +64,7 @@ def parse_money(val) -> float | None:
         return None
 
 
-def parse_revolut_csv(file_bytes: bytes) -> pd.DataFrame:
+def parse_revolut_csv(file_bytes: bytes):
     """
     Parsuje wyciąg Revolut z lokaty.
     Oczekiwane kolumny: Completed Date, Description, Money in, Money out, Balance, Product name
@@ -120,7 +120,7 @@ def parse_revolut_csv(file_bytes: bytes) -> pd.DataFrame:
     return interest_df[["date", "amount_eur", "Description"]].reset_index(drop=True)
 
 
-def calculate_tax(interest_df: pd.DataFrame) -> dict:
+def calculate_tax(interest_df):
     min_date = interest_df["date"].min()
     max_date = interest_df["date"].max()
 
